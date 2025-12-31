@@ -7,7 +7,6 @@ pypdf
 langchain-google-genai
 google-generativeai
 sentence-transformers
-torch
 azure-search-documents
 azure-core
 azure-identity
