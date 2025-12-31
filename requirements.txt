@@ -1,13 +1,8 @@
 streamlit
 langchain
 langchain-community
-langchain-huggingface
-faiss-cpu
+langchain-openai
 pypdf
-langchain-google-genai
-google-generativeai
-sentence-transformers
 azure-search-documents
 azure-core
 azure-identity
-langchain-openai

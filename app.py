@@ -2,30 +2,55 @@ import os
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from azure.search.documents import SearchClient
-from azure.core.credentials import AzureKeyCredential
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-st.set_page_config(page_title="Public Policy RAG Demo v2: Azure Multi-Doc", layout="centered")
+st.set_page_config(page_title="Public Policy RAG Demo: Azure Multi-Doc CMS Retrieval", layout="centered")
 
 st.markdown("""
 <style>
     .block-container {max-width: 900px; padding-top: 1rem; padding-bottom: 3rem;}
-    .main {background-color: #f8f9fa;}
-    h1 {color: #2c3e50; text-align: center;}
-    h3 {color: #34495e;}
-    .stMarkdown {font-size: 1.1rem; line-height: 1.6;}
+    .main {background-color: #ffffff;}
+    body {color: #1e3a8a; font-family: 'Arial', sans-serif; font-size: 1.2rem; line-height: 1.8;}
+    h1, h2, h3 {color: #1e3a8a;}
+    .stTextInput > div > div > input {font-size: 1.2rem;}
+    .stChatMessage {font-size: 1.2rem;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Public Policy RAG Demo v2: Multi-Document CMS Policy Retrieval (Personal Project)")
+st.title("Public Policy RAG Demo: Multi-Document CMS Policy Retrieval (Personal Project)")
 
-# (Keep your preferred text block from last—Version 1 with examples no quotes)
+st.markdown("""
+### About This Demo
+Personal open-source project exploring retrieval-augmented generation (RAG) for policy and compliance research.  
+Answers grounded exclusively in three public CMS documents (freely downloadable):
+- 2025 Medicaid NCCI Policy Manual (coding edits/guidelines): [CMS link](https://www.cms.gov/files/document/2025nccimedicaidpolicymanualcomplete.pdf)
+- 2025-2026 Medicaid Managed Care Rate Development Guide (rate setting): [CMS link](https://www.medicaid.gov/medicaid/managed-care/downloads/2025-2026-medicaid-rate-guide-082025.pdf)
+- Medicaid and CHIP Managed Care Program Integrity Toolkit (compliance tools): [CMS link](https://www.cms.gov/files/document/managed-care-compliance.pdf)
+
+No private, confidential, or personal data used—pure public federal guidance available to anyone. Not affiliated with or endorsed by any government agency.
+
+#### Why Multi-Document RAG
+Professionals working with federal healthcare policy (e.g., state compliance officers, analysts, or consultants) often need to quickly locate and understand specific rules in lengthy official documents—like coding edits, guidelines, or implementation details—to support accurate decision-making or rate adjustments.  
+This prototype merges the three sources into one searchable index, retrieving relevant, cited excerpts across documents for broader insights.
+
+**Intended Value**: Faster access to precise information from official sources, aiding general research, policy review, or professional workflows—while ensuring responses stay strictly tied to the original text for reliability.
+
+#### How to Use 🔍
+Ask natural-language questions. Responses provide factual summaries + expandable source excerpts with file/page.
+
+**Try these examples** (copy-paste):
+- What is the National Correct Coding Initiative? (NCCI manual)
+- How are capitation rates developed in managed care? (Rate Guide)
+- Compare NCCI PTP edits and program integrity requirements. (cross NCCI + Integrity Toolkit)
+- Summarize rate adjustments and medically unlikely edits (MUEs). (cross Rate Guide + NCCI)
+- Explain modifiers in NCCI and their relation to compliance tools. (cross all three)
+
+Built with LangChain + Azure AI Search + Azure OpenAI + App Service.
+""")
 
 # Hardcoded PDFs
 pdf_files = [
@@ -34,17 +59,21 @@ pdf_files = [
     "managed-care-compliance-toolkit.pdf"
 ]
 
-# Azure config from env vars (set in App Service)
+# Azure config from env vars
 AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_KEY = os.getenv("AZURE_SEARCH_KEY")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
+if not all([AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY]):
+    st.error("Azure credentials not configured—check App Service settings.")
+    st.stop()
+
 embeddings = AzureOpenAIEmbeddings(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_key=AZURE_OPENAI_KEY,
-    azure_deployment="gpt-4o-mini-embedding"  # If separate embedding deployment, or use chat model
+    azure_deployment=AZURE_OPENAI_DEPLOYMENT
 )
 
 llm = AzureChatOpenAI(
@@ -68,10 +97,10 @@ def load_and_index_documents():
     
     missing = [f for f in pdf_files if not os.path.exists(f)]
     if missing:
-        st.error(f"Missing PDFs for local indexing: {missing}. Cloud uses managed index.")
-        st.stop()
+        st.warning(f"Missing PDFs for local indexing: {missing}. Cloud uses managed index.")
+        return vector_store
     
-    st.info(f"Processing 3 PDFs locally for index...")
+    st.info(f"Processing 3 PDFs: {', '.join(pdf_files)}")
     
     docs = []
     for pdf in pdf_files:
@@ -88,7 +117,59 @@ def load_and_index_documents():
 
 retriever = load_and_index_documents().as_retriever(search_kwargs={"k": 12})
 
-# Prompt & chain (same as v2)
-# (Keep your prompt/format_docs/chain/chat from previous)
+prompt = PromptTemplate.from_template("""
+You are an expert on CMS Medicaid policy documents. Answer using only the provided context excerpts from the manuals. 
+If not covered, say "Not covered in the provided excerpts."
+Cite file names and page numbers.
 
-st.caption("Personal open-source project v2—feedback welcome! Public documents only.")
+Context:
+{context}
+
+Question: {question}
+
+Answer:
+""")
+
+def format_docs(docs):
+    formatted = []
+    for i, doc in enumerate(docs, 1):
+        source = os.path.basename(doc.metadata.get('source', 'unknown'))
+        page = doc.metadata.get('page', 'unknown') + 1
+        formatted.append(f"Excerpt {i} ({source}, Page {page}):\n{doc.page_content}\n")
+    return "\n".join(formatted)
+
+chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "sources" in message:
+            with st.expander("Retrieved excerpts"):
+                st.markdown(message["sources"])
+
+if prompt := st.chat_input("Ask about policy rules across CMS documents..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        with st.spinner("Retrieving & generating..."):
+            response = chain.invoke(prompt)
+            sources = format_docs(retriever.invoke(prompt))
+            st.markdown(response)
+            if sources:
+                with st.expander("Retrieved excerpts"):
+                    st.markdown(sources)
+                st.session_state.messages.append({"role": "assistant", "content": response, "sources": sources})
+            else:
+                st.session_state.messages.append({"role": "assistant", "content": response})
+
+st.caption("Personal open-source project—feedback welcome! Public documents only.")
