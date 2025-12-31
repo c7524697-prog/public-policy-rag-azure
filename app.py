@@ -1,7 +1,5 @@
 import os
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from langchain_core.prompts import PromptTemplate
@@ -52,13 +50,6 @@ Ask natural-language questions. Responses provide factual summaries + expandable
 Built with LangChain + Azure AI Search + Azure OpenAI + App Service.
 """)
 
-# Hardcoded PDFs
-pdf_files = [
-    "cms_ncci_2025_policy_manual.pdf",
-    "2025-2026-medicaid-rate-guide-082025.pdf",
-    "managed-care-compliance-toolkit.pdf"
-]
-
 # Azure config from env vars
 AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_KEY = os.getenv("AZURE_SEARCH_KEY")
@@ -73,14 +64,16 @@ if not all([AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY, AZURE_OPENAI_ENDPOINT, AZUR
 embeddings = AzureOpenAIEmbeddings(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_key=AZURE_OPENAI_KEY,
-    azure_deployment=AZURE_OPENAI_DEPLOYMENT
+    azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+    api_version="2024-02-01"
 )
 
 llm = AzureChatOpenAI(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_key=AZURE_OPENAI_KEY,
     azure_deployment=AZURE_OPENAI_DEPLOYMENT,
-    temperature=0.05
+    temperature=0.05,
+    api_version="2024-02-01"
 )
 
 vector_store = AzureSearch(
@@ -90,32 +83,7 @@ vector_store = AzureSearch(
     embedding_function=embeddings.embed_query
 )
 
-@st.cache_resource
-def load_and_index_documents():
-    if vector_store.index_exists():
-        return vector_store
-    
-    missing = [f for f in pdf_files if not os.path.exists(f)]
-    if missing:
-        st.warning(f"Missing PDFs for local indexing: {missing}. Cloud uses managed index.")
-        return vector_store
-    
-    st.info(f"Processing 3 PDFs: {', '.join(pdf_files)}")
-    
-    docs = []
-    for pdf in pdf_files:
-        loader = PyPDFLoader(pdf)
-        docs.extend(loader.load())
-    
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=300)
-    splits = splitter.split_documents(docs)
-    
-    vector_store.add_documents(splits)
-    st.success("Azure multi-document index ready!")
-    
-    return vector_store
-
-retriever = load_and_index_documents().as_retriever(search_kwargs={"k": 12})
+retriever = vector_store.as_retriever(search_kwargs={"k": 12})
 
 prompt = PromptTemplate.from_template("""
 You are an expert on CMS Medicaid policy documents. Answer using only the provided context excerpts from the manuals. 
