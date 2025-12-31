@@ -32,4 +32,5 @@ Try these examples (copy-paste):
 Built with LangChain + Azure AI Search + Azure OpenAI + App Service—all free/low-cost tiers for sustainable demo.
 
 Live Azure demo: rag-demo-app-bvgthfbga2evbbeh.centralus-01.azurewebsites.net
+
 Feedback welcome!
