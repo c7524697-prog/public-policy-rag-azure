@@ -1,10 +1,11 @@
 import os
 import streamlit as st
-from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_community.vectorstores.azuresearch import AzureSearch
+from langchain_openai import AzureChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
 st.set_page_config(page_title="Public Policy RAG Demo: Azure Multi-Doc CMS Retrieval", layout="centered")
 
@@ -55,35 +56,45 @@ AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_KEY = os.getenv("AZURE_SEARCH_KEY")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
-AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_CHAT_DEPLOYMENT = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt4o")
 
-if not all([AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY]):
-    st.error("Azure credentials not configured—check App Service settings.")
+required_vars = [
+    AZURE_SEARCH_ENDPOINT,
+    AZURE_SEARCH_KEY,
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_KEY
+]
+
+if not all(required_vars):
+    missing = [name for name, val in {
+        "AZURE_SEARCH_ENDPOINT": AZURE_SEARCH_ENDPOINT,
+        "AZURE_SEARCH_KEY": AZURE_SEARCH_KEY,
+        "AZURE_OPENAI_ENDPOINT": AZURE_OPENAI_ENDPOINT,
+        "AZURE_OPENAI_KEY": AZURE_OPENAI_KEY
+    }.items() if not val]
+    st.error(f"Missing required Azure credentials: {', '.join(missing)}. Check your environment variables.")
     st.stop()
 
-embeddings = AzureOpenAIEmbeddings(
-    azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    api_key=AZURE_OPENAI_KEY,
-    azure_deployment=AZURE_OPENAI_DEPLOYMENT,
-    api_version="2024-02-01"
-)
+# Local embeddings for retrieval
+local_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+# Cloud LLM
 llm = AzureChatOpenAI(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
     api_key=AZURE_OPENAI_KEY,
-    azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+    azure_deployment=AZURE_OPENAI_CHAT_DEPLOYMENT,
     temperature=0.05,
-    api_version="2024-02-01"
+    api_version="2025-01-01-preview"  # Matches your successful test
 )
 
 vector_store = AzureSearch(
     azure_search_endpoint=AZURE_SEARCH_ENDPOINT,
     azure_search_key=AZURE_SEARCH_KEY,
     index_name="rag-index",
-    embedding_function=embeddings.embed_query
+    embedding_function=local_embeddings.embed_query
 )
 
-retriever = vector_store.as_retriever(search_kwargs={"k": 12})
+retriever = RunnableLambda(lambda query: vector_store.hybrid_search(query, k=12))
 
 prompt = PromptTemplate.from_template("""
 You are an expert on CMS Medicaid policy documents. Answer using only the provided context excerpts from the manuals. 

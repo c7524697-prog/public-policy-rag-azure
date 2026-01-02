@@ -6,3 +6,5 @@ pypdf
 azure-search-documents
 azure-core
 azure-identity
+sentence-transformers  # Local embeddings
+torch  # Dependency for sentence-transformers (CPU version fine)
